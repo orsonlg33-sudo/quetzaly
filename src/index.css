@@ -1,0 +1,91 @@
+@import "tailwindcss";
+@import '@fontsource/plus-jakarta-sans/500.css';
+@import '@fontsource/plus-jakarta-sans/600.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --bg-canvas: #F6F4EE;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #ECE9E0;
+    --border-subtle: rgba(20, 21, 15, 0.08);
+    --text-primary: #14150F;
+    --text-secondary: #5F6157;
+    --accent: #E8A317;
+    --accent-gradient-start: #E8A317;
+    --accent-gradient-end: #E8761A;
+    --income: #0E8F63;
+    --danger: #C93C2E;
+    --scrollbar-thumb: rgba(20, 21, 15, 0.2);
+    --scrollbar-track: transparent;
+  }
+
+  .dark, html.dark {
+    color-scheme: dark;
+    --bg-canvas: #0F100E;
+    --bg-surface: #181A17;
+    --bg-elevated: #222520;
+    --border-subtle: rgba(242, 241, 234, 0.08);
+    --text-primary: #F2F1EA;
+    --text-secondary: #9A9C92;
+    --accent: #FFB020;
+    --accent-gradient-start: #FFB020;
+    --accent-gradient-end: #E8761A;
+    --income: #4FD1A1;
+    --danger: #FF6B5E;
+    --scrollbar-thumb: rgba(242, 241, 234, 0.2);
+    --scrollbar-track: transparent;
+  }
+
+  body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-weight: 500;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+  }
+}
+
+/* Global neutral thin scrollbar styling for Firefox & WebKit */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Tabular figures verification & styling */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 600;
+}
+
+/* Custom scrollbar hiding */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
