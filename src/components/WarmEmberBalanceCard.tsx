@@ -5,6 +5,8 @@
 
 import React, { useState } from 'react';
 import { BudgetLimit, BudgetPeriod, FinanceEntry, UserSettings, PeriodSummary } from '../types/finance';
+import { BillReserveResult, EMPTY_BILL_RESERVE } from '../lib/billReserveMath';
+import { formatShortDate } from '../lib/recurringMath';
 import { formatCents } from '../lib/currency';
 import { parseDateKey, formatDateKey } from '../lib/periodMath';
 import { calculateHeroCardMetrics } from '../lib/homeMath';
@@ -17,6 +19,8 @@ interface WarmEmberBalanceCardProps {
   currentEntries: FinanceEntry[];
   activePeriod: BudgetPeriod;
   activeOverallLimit?: BudgetLimit | null;
+  /** Scheduled bills still owed this cycle */
+  billReserve?: BillReserveResult;
   onOpenNewCycleRecap?: () => void;
 }
 
@@ -27,6 +31,7 @@ export const WarmEmberBalanceCard: React.FC<WarmEmberBalanceCardProps> = ({
   currentEntries,
   activePeriod,
   activeOverallLimit = null,
+  billReserve = EMPTY_BILL_RESERVE,
   onOpenNewCycleRecap,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -39,7 +44,11 @@ export const WarmEmberBalanceCard: React.FC<WarmEmberBalanceCardProps> = ({
     currentEntries,
     activePeriod,
     activeOverallLimit,
+    reservedForBillsCents: billReserve.reservedCents,
   });
+
+  const reservedBillCount = billReserve.bills.filter((b) => b.homeCents !== null).length;
+  const showsReserve = metrics.hasReservedBills && metrics.availableAfterBillsCents !== null;
 
   const startDate = parseDateKey(activePeriod.startDate);
   const today = new Date();
@@ -126,6 +135,12 @@ export const WarmEmberBalanceCard: React.FC<WarmEmberBalanceCardProps> = ({
                 {formatCents(metrics.secondaryAmountCents, currency)}{' '}
                 <span className="text-[12px] font-normal text-[#0F100E]/80">a day</span>
               </span>
+              {showsReserve && (
+                <span className="block text-[11px] text-[#0F100E]/80">
+                  after {formatCents(metrics.reservedForBillsCents, currency)} held for{' '}
+                  {reservedBillCount} {reservedBillCount === 1 ? 'bill' : 'bills'}
+                </span>
+              )}
             </div>
           ) : (
             <div />
@@ -152,6 +167,61 @@ export const WarmEmberBalanceCard: React.FC<WarmEmberBalanceCardProps> = ({
               <span className="block text-[10px] uppercase font-bold opacity-80">Carried Over</span>
               <span className="font-bold tabular-nums text-xs">{formatCents(effectiveStartingBalance, currency)}</span>
             </div>
+          </div>
+        )}
+
+        {/* How the safe-to-spend figure was reached, and the bills behind it */}
+        {isExpanded && showsReserve && (
+          <div className="mt-3 pt-3 border-t border-black/20 text-[#0F100E] animate-in fade-in duration-200">
+            <div className="space-y-1 text-[11px]">
+              <div className="flex items-center justify-between gap-3">
+                <span className="opacity-80">Left to spend</span>
+                <span className="font-semibold tabular-nums">
+                  {formatCents(metrics.leftToSpendCents ?? 0, currency)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="opacity-80">Held for unpaid bills</span>
+                <span className="font-semibold tabular-nums">
+                  &minus;{formatCents(metrics.reservedForBillsCents, currency)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3 pt-1 border-t border-black/15">
+                <span className="font-semibold">
+                  Available over {metrics.daysRemaining} {metrics.daysRemaining === 1 ? 'day' : 'days'}
+                </span>
+                <span className="font-bold tabular-nums">
+                  {formatCents(metrics.availableAfterBillsCents ?? 0, currency)}
+                </span>
+              </div>
+            </div>
+
+            <ul className="mt-2 pt-2 border-t border-black/15 space-y-1 text-[11px]">
+              {billReserve.bills.slice(0, 5).map((bill) => (
+                <li key={`${bill.ruleId}_${bill.date}`} className="flex items-center justify-between gap-3">
+                  <span className="truncate opacity-80">
+                    {bill.note || 'Scheduled bill'}
+                    <span className="opacity-70"> &middot; {bill.isOverdue ? 'overdue' : formatShortDate(bill.date)}</span>
+                  </span>
+                  <span className="font-semibold tabular-nums shrink-0">
+                    {bill.homeCents === null
+                      ? `${bill.currency} \u2014`
+                      : formatCents(bill.homeCents, currency)}
+                  </span>
+                </li>
+              ))}
+              {billReserve.bills.length > 5 && (
+                <li className="opacity-70">and {billReserve.bills.length - 5} more</li>
+              )}
+            </ul>
+
+            {billReserve.unconvertedCount > 0 && (
+              <p className="mt-2 text-[10px] opacity-75">
+                {billReserve.unconvertedCount} {billReserve.unconvertedCount === 1 ? 'bill is' : 'bills are'} in
+                another currency with no saved rate, so {billReserve.unconvertedCount === 1 ? 'it is' : 'they are'} not
+                included in the figure above.
+              </p>
+            )}
           </div>
         )}
       </div>

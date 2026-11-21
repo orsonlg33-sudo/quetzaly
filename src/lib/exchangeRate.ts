@@ -54,6 +54,21 @@ function setRateCache(from: string, to: string, rate: number, date: string) {
   }
 }
 
+/**
+ * Reads a cached rate synchronously, for projections that must not hit the network.
+ * Returns null when nothing is cached for the pair.
+ */
+export function getCachedRate(fromCurrency: string, toCurrency: string): number | null {
+  const from = fromCurrency.toUpperCase();
+  const to = toCurrency.toUpperCase();
+  if (from === to) return 1;
+  const cached = getRateCache()[`${from}_${to}`];
+  if (cached && cached.rate > 0) return cached.rate;
+  const inverse = getRateCache()[`${to}_${from}`];
+  if (inverse && inverse.rate > 0) return 1 / inverse.rate;
+  return null;
+}
+
 export interface RateResult {
   rate: number;
   rateStatus: RateStatus;
