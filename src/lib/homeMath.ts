@@ -36,8 +36,16 @@ export interface HeroCardMetrics {
   dailyAllowanceCents: number | null;
   averageDailyCents: number;
   hasAverage: boolean;
-  secondaryLabel: 'Daily allowance' | 'Average per day' | null;
+  secondaryLabel: 'Daily allowance' | 'Safe to spend a day' | 'Average per day' | null;
   secondaryAmountCents: number | null;
+  /** Scheduled bills in this cycle that are still unpaid */
+  reservedForBillsCents: number;
+  /** Left to spend once those bills are set aside, null when there is no budget to spend from */
+  availableAfterBillsCents: number | null;
+  /** availableAfterBills spread over the days left, null when there is no budget */
+  dailyAfterBillsCents: number | null;
+  /** True when bills were reserved, so the card should lead with the after-bills figure */
+  hasReservedBills: boolean;
   daysRemaining: number;
   totalDays: number;
   daysElapsed: number;
@@ -197,12 +205,36 @@ export function calculateHeroCardMetrics(params: {
   currentEntries: FinanceEntry[];
   activePeriod: BudgetPeriod;
   activeOverallLimit?: BudgetLimit | null;
+  /** Scheduled bills still owed this cycle, from computeBillReserve */
+  reservedForBillsCents?: number;
   now?: Date;
 }): HeroCardMetrics {
-  const { summary, currentEntries, activePeriod, activeOverallLimit = null, now = new Date() } = params;
+  const {
+    summary,
+    currentEntries,
+    activePeriod,
+    activeOverallLimit = null,
+    reservedForBillsCents = 0,
+    now = new Date(),
+  } = params;
+  const reserved = Math.max(0, reservedForBillsCents);
 
   const dayMetrics = getCycleDayMetrics(activePeriod, now);
   const avgMetrics = calculateDailyAverageMetrics(currentEntries, activePeriod, now);
+
+  /**
+   * Spreads what is left over the days remaining, after setting aside unpaid bills.
+   * A reserve larger than the balance yields 0 a day rather than a negative allowance,
+   * because the honest reading there is "nothing is free", not "you may spend backwards".
+   */
+  const afterBills = (leftToSpendCents: number) => {
+    const availableAfterBillsCents = leftToSpendCents - reserved;
+    const dailyAfterBillsCents =
+      dayMetrics.daysRemaining > 0
+        ? Math.round(Math.max(0, availableAfterBillsCents) / dayMetrics.daysRemaining)
+        : 0;
+    return { availableAfterBillsCents, dailyAfterBillsCents };
+  };
 
   const hasIncome = summary.periodIncome > 0;
   const hasOverallLimit = Boolean(activeOverallLimit && activeOverallLimit.amount > 0);
@@ -215,6 +247,8 @@ export function calculateHeroCardMetrics(params: {
         ? Math.round(Math.max(0, leftToSpendCents) / dayMetrics.daysRemaining)
         : 0;
 
+    const { availableAfterBillsCents, dailyAfterBillsCents } = afterBills(leftToSpendCents);
+
     return {
       hasIncome,
       hasOverallLimit,
@@ -226,8 +260,12 @@ export function calculateHeroCardMetrics(params: {
       dailyAllowanceCents,
       averageDailyCents: avgMetrics.averageDailyCents,
       hasAverage: avgMetrics.hasAverage,
-      secondaryLabel: 'Daily allowance',
-      secondaryAmountCents: dailyAllowanceCents,
+      secondaryLabel: reserved > 0 ? 'Safe to spend a day' : 'Daily allowance',
+      secondaryAmountCents: reserved > 0 ? dailyAfterBillsCents : dailyAllowanceCents,
+      reservedForBillsCents: reserved,
+      availableAfterBillsCents,
+      dailyAfterBillsCents,
+      hasReservedBills: reserved > 0,
       daysRemaining: dayMetrics.daysRemaining,
       totalDays: dayMetrics.totalDays,
       daysElapsed: dayMetrics.daysElapsed,
@@ -244,6 +282,8 @@ export function calculateHeroCardMetrics(params: {
         ? Math.round(Math.max(0, leftToSpendCents) / dayMetrics.daysRemaining)
         : 0;
 
+    const { availableAfterBillsCents, dailyAfterBillsCents } = afterBills(leftToSpendCents);
+
     return {
       hasIncome,
       hasOverallLimit,
@@ -255,8 +295,12 @@ export function calculateHeroCardMetrics(params: {
       dailyAllowanceCents,
       averageDailyCents: avgMetrics.averageDailyCents,
       hasAverage: avgMetrics.hasAverage,
-      secondaryLabel: 'Daily allowance',
-      secondaryAmountCents: dailyAllowanceCents,
+      secondaryLabel: reserved > 0 ? 'Safe to spend a day' : 'Daily allowance',
+      secondaryAmountCents: reserved > 0 ? dailyAfterBillsCents : dailyAllowanceCents,
+      reservedForBillsCents: reserved,
+      availableAfterBillsCents,
+      dailyAfterBillsCents,
+      hasReservedBills: reserved > 0,
       daysRemaining: dayMetrics.daysRemaining,
       totalDays: dayMetrics.totalDays,
       daysElapsed: dayMetrics.daysElapsed,
@@ -279,6 +323,10 @@ export function calculateHeroCardMetrics(params: {
     hasAverage: avgMetrics.hasAverage,
     secondaryLabel: avgMetrics.hasAverage ? 'Average per day' : null,
     secondaryAmountCents: avgMetrics.hasAverage ? avgMetrics.averageDailyCents : null,
+    reservedForBillsCents: reserved,
+    availableAfterBillsCents: null,
+    dailyAfterBillsCents: null,
+    hasReservedBills: reserved > 0,
     daysRemaining: dayMetrics.daysRemaining,
     totalDays: dayMetrics.totalDays,
     daysElapsed: dayMetrics.daysElapsed,

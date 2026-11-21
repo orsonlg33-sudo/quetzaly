@@ -74,6 +74,8 @@ import { GlobalViewModal } from './components/GlobalViewModal';
 import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { BudgetLimitModal } from './components/BudgetLimitModal';
 import { InsightHeader } from './components/InsightHeader';
+import { computeBillReserve } from './lib/billReserveMath';
+import { getCachedRate } from './lib/exchangeRate';
 import { VelocityHeroCard } from './components/VelocityHeroCard';
 import { DailyBarChart } from './components/DailyBarChart';
 import { SixCycleTrendWidget } from './components/SixCycleTrendWidget';
@@ -135,6 +137,7 @@ export default function App() {
   // Recurring entries state
   const [recurringRules, setRecurringRules] = useState<RecurringRule[]>([]);
   const [dueOccurrences, setDueOccurrences] = useState<DueOccurrence[]>([]);
+  const [recordedOccurrences, setRecordedOccurrences] = useState<Map<string, RecurringOccurrence>>(new Map());
   const [isRecurringModalOpen, setIsRecurringModalOpen] = useState<boolean>(false);
   const [editingRecurringRule, setEditingRecurringRule] = useState<RecurringRule | null>(null);
   const [recurringModalInitialData, setRecurringModalInitialData] = useState<Partial<RecurringRule> | undefined>(undefined);
@@ -178,6 +181,7 @@ export default function App() {
       }
 
       setDueOccurrences(manualDue);
+      setRecordedOccurrences(occMap);
 
       if (autoToPost.length > 0) {
         const createdEntries: FinanceEntry[] = [];
@@ -237,6 +241,11 @@ export default function App() {
 
         await bulkAddEntries(createdEntries);
         await bulkSaveRecurringOccurrences(occurrencesToSave);
+        setRecordedOccurrences((prev) => {
+          const next = new Map(prev);
+          for (const o of occurrencesToSave) next.set(o.id, o);
+          return next;
+        });
 
         setEntries((prev) => [...createdEntries, ...prev]);
 
@@ -706,6 +715,7 @@ export default function App() {
 
     await addEntry(newEntry);
     await saveRecurringOccurrence(occ);
+    setRecordedOccurrences((prev) => new Map(prev).set(occ.id, occ));
 
     setEntries((prev) => [newEntry, ...prev]);
     setDueOccurrences((prev) =>
@@ -731,6 +741,7 @@ export default function App() {
       updatedAt: now,
     };
     await saveRecurringOccurrence(occ);
+    setRecordedOccurrences((prev) => new Map(prev).set(occ.id, occ));
     setDueOccurrences((prev) =>
       prev.filter((d) => !(d.rule.id === due.rule.id && d.date === due.date))
     );
@@ -886,6 +897,22 @@ export default function App() {
     );
   }, [limits, activePeriod.id]);
 
+  /**
+   * Scheduled bills still owed in this cycle. Posting or skipping one records its
+   * occurrence, which is what takes it out of the reserve, so a bill is either held
+   * back here or counted as spending, never both.
+   */
+  const billReserve = useMemo(() => {
+    return computeBillReserve({
+      rules: recurringRules,
+      occurrences: recordedOccurrences,
+      period: activePeriod,
+      today: getTodayDateString(),
+      homeCurrency: settings.homeCurrency,
+      getRate: (currency) => getCachedRate(currency, settings.homeCurrency),
+    });
+  }, [recurringRules, recordedOccurrences, activePeriod, settings.homeCurrency]);
+
   // Save Settings handler with home currency recomputation support
   const handleSaveSettings = async (
     updates: Partial<UserSettings>,
@@ -1009,6 +1036,7 @@ export default function App() {
                   currentEntries={periodEntries}
                   activePeriod={activePeriod}
                   activeOverallLimit={activeOverallLimit}
+                  billReserve={billReserve}
                   onOpenNewCycleRecap={() => setActiveTab('insights')}
                 />
 
