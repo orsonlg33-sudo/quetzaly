@@ -4,12 +4,14 @@
  */
 
 import React, { useState } from 'react';
-import { UserSettings, Category, BudgetLimit } from '../types/finance';
-import { getCurrencyName, formatCents } from '../lib/currency';
+import { UserSettings, Category, BudgetLimit, FinanceEntry } from '../types/finance';
+import { getCurrencyName, formatCents, formatTransactionDate } from '../lib/currency';
 import { CurrencyPickerSheet } from './CurrencyPickerSheet';
 import { ChevronRight, Check, X } from 'lucide-react';
 import { AdaptiveModal, AdaptiveModalActions } from './AdaptiveModal';
-import { exportDatabase, validateBackup, importDatabase } from '../lib/db';
+import { exportDatabase, validateBackup, importDatabase, requestPersistentStorage } from '../lib/db';
+import { computeBackupSafety, describeLastBackup, summariseBackupContents } from '../lib/backupSafety';
+import { getPersistenceState } from '../lib/storagePersistence';
 import { usePWA } from '../hooks/usePWA';
 
 interface SettingsViewProps {
@@ -18,6 +20,8 @@ interface SettingsViewProps {
   categories: Category[];
   limits: BudgetLimit[];
   recurringCount?: number;
+  /** Every entry on the device, for working out what is not yet in a backup */
+  entries: FinanceEntry[];
   sampleCount: number;
   onLoadSampleData: () => void;
   onClearSampleData: () => void;
@@ -36,6 +40,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   categories,
   limits,
   recurringCount = 0,
+  entries,
   sampleCount,
   onLoadSampleData,
   onClearSampleData,
@@ -63,6 +68,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [showReplaceConfirm, setShowReplaceConfirm] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [persistence, setPersistence] = useState<{ supported: boolean; persisted: boolean } | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    getPersistenceState().then((state) => {
+      if (alive) setPersistence(state);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const backupSafety = React.useMemo(
+    () =>
+      computeBackupSafety({
+        entries,
+        lastBackupAt: settings.lastBackupAt ?? null,
+        dismissedAtCount: settings.backupPromptDismissedAtCount ?? null,
+      }),
+    [entries, settings.lastBackupAt, settings.backupPromptDismissedAtCount]
+  );
+
+  const handleEnablePersistence = async () => {
+    const granted = await requestPersistentStorage();
+    setPersistence({ supported: true, persisted: granted });
+    setToastMessage(
+      granted
+        ? 'This device will now keep Quetzaly data.'
+        : 'The browser declined for now. Keep exporting backups.'
+    );
+  };
 
   React.useEffect(() => {
     if (!toastMessage) return;
@@ -98,6 +134,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     a.click();
     URL.revokeObjectURL(url);
     setIsExportModalOpen(false);
+    await onSaveSettings({ lastBackupAt: Date.now(), backupPromptDismissedAtCount: undefined });
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -384,6 +421,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Backup
           </span>
           <div className="bg-[var(--bg-surface)] rounded-[28px] border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] overflow-hidden">
+            {/* What is, and is not, protected right now */}
+            <div className="p-4 border-b border-[var(--border-subtle)] space-y-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block text-sm font-medium text-[var(--text-primary)]">Last backup</span>
+                  <span className="block text-[11px] text-[var(--text-secondary)] mt-0.5">
+                    {describeLastBackup(backupSafety)}
+                  </span>
+                </div>
+                <span
+                  className={`text-[11px] font-semibold tabular-nums shrink-0 px-2 py-1 rounded-lg ${
+                    backupSafety.isAtRisk
+                      ? 'text-[var(--accent-amber,#FFB020)] bg-[var(--accent-amber,#FFB020)]/10'
+                      : 'text-[var(--text-secondary)] bg-[var(--bg-elevated)]'
+                  }`}
+                >
+                  {backupSafety.entriesSinceBackup === 0
+                    ? 'All saved'
+                    : `${backupSafety.entriesSinceBackup} ${
+                        backupSafety.entriesSinceBackup === 1 ? 'entry' : 'entries'
+                      } not backed up`}
+                </span>
+              </div>
+
+              {persistence?.supported && (
+                <div className="flex items-start justify-between gap-3 pt-2 border-t border-[var(--border-subtle)]">
+                  <div className="min-w-0">
+                    <span className="block text-sm font-medium text-[var(--text-primary)]">Device storage</span>
+                    <span className="block text-[11px] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
+                      {persistence.persisted
+                        ? 'This browser has agreed to keep your data.'
+                        : 'The browser may clear this data if space runs short.'}
+                    </span>
+                  </div>
+                  {!persistence.persisted && (
+                    <button
+                      type="button"
+                      onClick={handleEnablePersistence}
+                      className="shrink-0 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:opacity-80 transition-opacity cursor-pointer"
+                    >
+                      Keep data
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={handleOpenExportModal}
@@ -620,9 +704,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           ) : importBackupData ? (
             <>
-              <p className="text-xs font-medium text-[var(--text-secondary)] leading-relaxed">
-                {summaryCounts}
-              </p>
+              {(() => {
+                const preview = summariseBackupContents(importBackupData);
+                const range =
+                  preview.firstDate && preview.lastDate
+                    ? preview.firstDate === preview.lastDate
+                      ? formatTransactionDate(preview.firstDate)
+                      : `${formatTransactionDate(preview.firstDate)} to ${formatTransactionDate(preview.lastDate)}`
+                    : 'No entries';
+                return (
+                  <div className="p-3.5 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] space-y-1.5 text-left">
+                    <p className="text-xs font-semibold text-[var(--text-primary)]">
+                      {preview.entryCount} {preview.entryCount === 1 ? 'entry' : 'entries'}, {range}
+                    </p>
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                      {preview.currencies.length > 0
+                        ? `Currencies: ${preview.currencies.slice(0, 6).join(', ')}${
+                            preview.currencies.length > 6 ? ` and ${preview.currencies.length - 6} more` : ''
+                          }`
+                        : 'No currencies recorded'}
+                    </p>
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">{summaryCounts}</p>
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const backupHomeCurrency = (importBackupData?.data?.settings?.homeCurrency || '').toUpperCase();
