@@ -21,7 +21,8 @@ import {
   addEntry,
   updateEntry,
   deleteEntry,
-  clearSampleEntries,
+  clearAllSampleData,
+  loadCrossBorderSampleToDB,
   bulkAddEntries,
   initDefaultCategoriesIfNeeded,
   getStoredSettings,
@@ -54,15 +55,13 @@ import {
   getTodayDateString,
   parseDate,
 } from './lib/recurringMath';
-import { generateSampleEntries, DEFAULT_SETTINGS } from './lib/defaults';
+import { DEFAULT_SETTINGS } from './lib/defaults';
 import { getExchangeRate, calculateHomeAmountCents } from './lib/exchangeRate';
 import { applyWelcomeSkip, applyWelcomeGetStarted } from './lib/welcomeLogic';
 import { resolveTheme, getSystemPrefersDark, applyThemeToDom } from './lib/theme';
 
 // Components
 import { PeriodHeader } from './components/PeriodHeader';
-import { PeriodSummary } from './components/PeriodSummary';
-import { CategoryBreakdown } from './components/CategoryBreakdown';
 import { EntryList } from './components/EntryList';
 import { EntryModal } from './components/EntryModal';
 import { ReceiptModal } from './components/ReceiptModal';
@@ -79,8 +78,9 @@ import { computeBackupSafety } from './lib/backupSafety';
 import { getCachedRate } from './lib/exchangeRate';
 import { VelocityHeroCard } from './components/VelocityHeroCard';
 import { DailyBarChart } from './components/DailyBarChart';
-import { SixCycleTrendWidget } from './components/SixCycleTrendWidget';
+import { CategoryBreakdown } from './components/CategoryBreakdown';
 import { EarnedVsSpentWidget } from './components/EarnedVsSpentWidget';
+import { InsightsView } from './components/InsightsView';
 import { BottomNav } from './components/BottomNav';
 import { WarmEmberBalanceCard } from './components/WarmEmberBalanceCard';
 import { SettingsView } from './components/SettingsView';
@@ -194,6 +194,8 @@ export default function App() {
           let rate = 1.0;
           let homeAmount = item.rule.amount;
           let rateStatus: any = 'fetched';
+          let rateDate: string | undefined;
+          let rateSource: string | undefined;
 
           if (item.rule.currency.toUpperCase() !== currentHomeCurrency.toUpperCase()) {
             try {
@@ -202,6 +204,8 @@ export default function App() {
                 rate = res.rate;
                 homeAmount = calculateHomeAmountCents(item.rule.amount, res.rate);
                 rateStatus = res.rateStatus;
+                rateDate = res.rateDate;
+                rateSource = res.source;
               } else {
                 rateStatus = 'pending';
               }
@@ -210,6 +214,7 @@ export default function App() {
             }
           }
 
+          const isFromSample = Boolean(item.rule.isSample);
           const newEntry: FinanceEntry = {
             id: entryId,
             recurringId: item.rule.id,
@@ -221,10 +226,12 @@ export default function App() {
             rate,
             rateStatus,
             rateEditedManually: false,
+            ...(rateDate ? { rateDate } : {}),
+            ...(rateSource ? { rateSource } : {}),
             date: item.date,
             categoryId: item.rule.categoryId,
             note: item.rule.note,
-            isSample: false,
+            isSample: isFromSample,
             createdAt: now,
             updatedAt: now,
           };
@@ -236,6 +243,7 @@ export default function App() {
             date: item.date,
             status: 'posted',
             entryId: newEntry.id,
+            ...(isFromSample ? { isSample: true } : {}),
             updatedAt: now,
           });
         }
@@ -443,10 +451,20 @@ export default function App() {
     return getOffsetPeriod(activePeriod, -1, settings.monthStartDay || 22);
   }, [activePeriod, settings.monthStartDay]);
 
-  // Count sample entries
-  const sampleCount = useMemo(() => {
+  // Count sample entries & detect active sample data across entries, limits, and rules
+  const sampleEntryCount = useMemo(() => {
     return entries.filter((e) => e.isSample).length;
   }, [entries]);
+
+  const hasSampleData = useMemo(() => {
+    return (
+      sampleEntryCount > 0 ||
+      limits.some((l) => l.isSample) ||
+      recurringRules.some((r) => r.isSample)
+    );
+  }, [sampleEntryCount, limits, recurringRules]);
+
+  const sampleCount = hasSampleData ? Math.max(1, sampleEntryCount) : 0;
 
   // Entries filtered for active budget cycle
   const periodEntries = useMemo(() => {
@@ -526,6 +544,8 @@ export default function App() {
         rate: entryData.rate ?? 1.0,
         rateStatus: entryData.rateStatus || (entryCurrency === settings.homeCurrency ? 'fetched' : 'pending'),
         rateEditedManually: Boolean(entryData.rateEditedManually),
+        ...(entryData.rateDate ? { rateDate: entryData.rateDate } : {}),
+        ...(entryData.rateSource ? { rateSource: entryData.rateSource } : {}),
         date: entryData.date || formatDateKey(new Date()),
         categoryId: entryData.categoryId || categories[0]?.id || 'cat_other_exp',
         note: entryData.note,
@@ -601,6 +621,8 @@ export default function App() {
       homeAmount,
       rateStatus: 'manual',
       rateEditedManually: true,
+      rateDate: formatDateKey(new Date()),
+      rateSource: 'Manual',
       updatedAt: Date.now(),
     };
     await updateEntry(updated);
@@ -673,6 +695,8 @@ export default function App() {
     let rate = 1.0;
     let homeAmount = due.rule.amount;
     let rateStatus: any = 'fetched';
+    let rateDate: string | undefined;
+    let rateSource: string | undefined;
 
     if (due.rule.currency.toUpperCase() !== settings.homeCurrency.toUpperCase()) {
       try {
@@ -681,6 +705,8 @@ export default function App() {
           rate = res.rate;
           homeAmount = calculateHomeAmountCents(due.rule.amount, res.rate);
           rateStatus = res.rateStatus;
+          rateDate = res.rateDate;
+          rateSource = res.source;
         } else {
           rateStatus = 'pending';
         }
@@ -689,6 +715,7 @@ export default function App() {
       }
     }
 
+    const isFromSample = Boolean(due.rule.isSample);
     const newEntry: FinanceEntry = {
       id: entryId,
       recurringId: due.rule.id,
@@ -700,10 +727,12 @@ export default function App() {
       rate,
       rateStatus,
       rateEditedManually: false,
+      ...(rateDate ? { rateDate } : {}),
+      ...(rateSource ? { rateSource } : {}),
       date: due.date,
       categoryId: due.rule.categoryId,
       note: due.rule.note,
-      isSample: false,
+      isSample: isFromSample,
       createdAt: now,
       updatedAt: now,
     };
@@ -714,6 +743,7 @@ export default function App() {
       date: due.date,
       status: 'posted',
       entryId: newEntry.id,
+      ...(isFromSample ? { isSample: true } : {}),
       updatedAt: now,
     };
 
@@ -823,16 +853,29 @@ export default function App() {
     setIsReceiptModalOpen(false);
   };
 
-  // Sample data actions
+  // Sample data actions (idempotent cross-border bundle + surgical clear)
   const handleLoadSampleData = async () => {
-    const samples = generateSampleEntries(settings.homeCurrency, currentCalendarPeriod.startDate);
-    await bulkAddEntries(samples);
-    setEntries((prev) => [...samples, ...prev]);
+    const loaded = await loadCrossBorderSampleToDB(
+      settings.homeCurrency,
+      settings.monthStartDay || 1
+    );
+    setEntries(loaded.entries);
+    setRecurringRules(loaded.recurringRules);
+    setLimits(loaded.limits);
+    await checkRecurringEntries(loaded.recurringRules, settings.homeCurrency);
   };
 
   const handleClearSampleData = async () => {
-    await clearSampleEntries();
-    setEntries((prev) => prev.filter((e) => !e.isSample));
+    await clearAllSampleData();
+    const [remainingEntries, remainingRules, remainingLimits] = await Promise.all([
+      getAllEntries(),
+      getAllRecurringRules(),
+      getAllLimits(),
+    ]);
+    setEntries(remainingEntries);
+    setRecurringRules(remainingRules);
+    setLimits(remainingLimits);
+    await checkRecurringEntries(remainingRules, settings.homeCurrency);
   };
 
   // Category CRUD Handlers
@@ -954,16 +997,18 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[var(--bg-canvas)] text-[var(--text-primary)] flex flex-col items-center">
       {/* Top Banner if sample data is loaded - slim neutral strip without sparkle icon */}
-      {sampleCount > 0 && (
+      {hasSampleData && (
         <div className="w-full bg-[var(--bg-elevated)] border-b border-[var(--border-subtle)] py-1.5 px-4">
           <div className="max-w-2xl mx-auto flex items-center justify-between gap-3 text-xs">
             <span className="truncate text-[var(--text-secondary)]">
-              Viewing sample demo entries ({sampleCount})
+              {sampleEntryCount > 0
+                ? `Viewing sample demo entries (${sampleEntryCount})`
+                : 'Viewing sample demo data'}
             </span>
             <button
               type="button"
               onClick={handleClearSampleData}
-              className="flex items-center gap-1 text-[11px] font-medium text-[var(--text-secondary)] hover:text-[var(--danger)] hover:underline shrink-0"
+              className="flex items-center gap-1 text-[11px] font-medium text-[var(--text-secondary)] hover:text-[var(--danger)] hover:underline shrink-0 cursor-pointer"
             >
               <Trash2 className="w-3 h-3" />
               <span>Clear sample data</span>
@@ -1174,29 +1219,17 @@ export default function App() {
         )}
 
         {activeTab === 'insights' && (
-          <div className="space-y-6">
-            <div className="bg-[var(--bg-surface)] rounded-[28px] p-6 border border-[var(--border-subtle)] space-y-3">
-              <h2 className="text-base font-bold">Cycle Recap & Trajectory</h2>
-              <p className="text-xs text-[var(--text-secondary)]">
-                Review your multi-cycle spending behavior, category shifts, and financial trajectory over time.
-              </p>
-            </div>
-            <EarnedVsSpentWidget
-              entries={entries}
-              settings={settings}
-              currentPeriod={activePeriod}
-            />
-            <CategoryBreakdown
-              entries={periodEntries}
-              previousEntries={previousPeriodEntries}
-              categories={categories}
-              settings={settings}
-              limits={limits}
-              activePeriodId={activePeriod.id}
-              onOpenLimitModal={handleOpenLimitModal}
-              onOpenCategoryManager={() => setIsCategoryManagerOpen(true)}
-            />
-          </div>
+          <InsightsView
+            entries={entries}
+            categories={categories}
+            settings={settings}
+            activePeriod={activePeriod}
+            previousPeriod={previousPeriod}
+            currentCalendarPeriod={currentCalendarPeriod}
+            onPreviousPeriod={handlePreviousPeriod}
+            onNextPeriod={handleNextPeriod}
+            onJumpToCurrent={handleJumpToCurrent}
+          />
         )}
 
         {activeTab === 'settings' && (

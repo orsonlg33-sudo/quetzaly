@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { Search, Camera, ChevronRight, X, Copy, Edit2, Trash2 } from 'lucide-react';
+import { Search, Camera, ChevronRight, X } from 'lucide-react';
 import { Category, FinanceEntry, UserSettings, RecurringRule } from '../types/finance';
-import { formatCents, formatTransactionDate } from '../lib/currency';
+import { formatCodeAmount, formatTransactionDate } from '../lib/currency';
+import { buildEntryDetailPresentation, buildHistoryRowPresentation } from '../lib/entryDisplay';
 import { AdaptiveModal } from './AdaptiveModal';
 
 interface EntryListProps {
@@ -32,7 +33,6 @@ export const EntryList: React.FC<EntryListProps> = ({
   onDuplicate,
   onDelete,
   onViewReceipt,
-  onUpdateRate,
   onOpenRecurring,
   showSearch = false,
 }) => {
@@ -48,7 +48,12 @@ export const EntryList: React.FC<EntryListProps> = ({
       const catName = cat ? cat.name.toLowerCase() : '';
       const note = e.note ? e.note.toLowerCase() : '';
       const amountStr = (e.amount / 100).toString();
-      return catName.includes(q) || note.includes(q) || amountStr.includes(q) || e.currency.toLowerCase().includes(q);
+      return (
+        catName.includes(q) ||
+        note.includes(q) ||
+        amountStr.includes(q) ||
+        e.currency.toLowerCase().includes(q)
+      );
     });
   }, [entries, searchQuery, categories]);
 
@@ -83,7 +88,7 @@ export const EntryList: React.FC<EntryListProps> = ({
         name: 'General',
         emoji: type === 'income' ? '💰' : '📦',
         color: '#706764',
-        type: type as any,
+        type: type as Category['type'],
       }
     );
   };
@@ -104,97 +109,109 @@ export const EntryList: React.FC<EntryListProps> = ({
         </div>
       )}
 
-      <div className="space-y-6">
-        {sortedDates.map((dateKey) => {
-          const dateEntries = groups.get(dateKey) || [];
-          const dayTotal = dateEntries.reduce((sum, e) => {
-            if (e.type === 'expense') {
-              return sum + (e.homeAmount ?? e.amount ?? 0);
-            }
-            return sum - (e.homeAmount ?? e.amount ?? 0);
-          }, 0);
+      {filteredEntries.length === 0 ? (
+        <div className="w-full bg-[var(--bg-surface)] rounded-[28px] p-6 border border-[var(--border-subtle)] text-center text-xs text-[var(--text-secondary)]">
+          No transactions match &ldquo;{searchQuery}&rdquo;.
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {sortedDates.map((dateKey) => {
+            const dateEntries = groups.get(dateKey) || [];
+            const dayTotal = dateEntries.reduce((sum, e) => {
+              const isPendingWithoutHome =
+                e.rateStatus === 'pending' && (!e.homeAmount || e.homeAmount <= 0);
+              if (isPendingWithoutHome) return sum;
+              const amt = e.homeAmount ?? e.amount ?? 0;
+              return e.type === 'expense' ? sum + amt : sum - amt;
+            }, 0);
 
-          return (
-            <div key={dateKey} className="space-y-1">
-              {/* Date Header with Net Total on the Right */}
-              <div className="flex items-center justify-between text-[11px] font-semibold text-[var(--text-secondary)] px-2 pb-1 border-b border-[var(--border-subtle)]">
-                <span>{formatTransactionDate(dateKey)}</span>
-                <span className="tabular-nums text-[var(--text-primary)]">
-                  {formatCents(Math.abs(dayTotal), settings.homeCurrency)}
-                </span>
-              </div>
+            return (
+              <div key={dateKey} className="space-y-1">
+                {/* Date Header with Net Total on the Right */}
+                <div className="flex items-center justify-between text-[11px] font-semibold text-[var(--text-secondary)] px-2 pb-1 border-b border-[var(--border-subtle)]">
+                  <span>{formatTransactionDate(dateKey)}</span>
+                  <span className="tabular-nums text-[var(--text-primary)]">
+                    {formatCodeAmount(Math.abs(dayTotal), settings.homeCurrency)}
+                  </span>
+                </div>
 
-              {/* Ledger Rows sitting on the canvas with hairline dividers */}
-              <div className="divide-y divide-[var(--border-subtle)] px-1">
-                {dateEntries.map((entry) => {
-                  const category = getCategory(entry.categoryId, entry.type);
-                  const isIncome = entry.type === 'income';
-                  const isForeign = entry.currency.toUpperCase() !== settings.homeCurrency.toUpperCase();
+                {/* Ledger Rows as accessible buttons sitting on canvas with hairline dividers */}
+                <div className="divide-y divide-[var(--border-subtle)]">
+                  {dateEntries.map((entry) => {
+                    const category = getCategory(entry.categoryId, entry.type);
+                    const row = buildHistoryRowPresentation(
+                      entry,
+                      category,
+                      settings.homeCurrency
+                    );
 
-                  return (
-                    <div
-                      key={entry.id}
-                      onClick={() => setActiveDetailEntry(entry)}
-                      className="group flex items-center justify-between py-3.5 cursor-pointer hover:bg-[var(--bg-elevated)]/40 transition-colors gap-2"
-                    >
-                      {/* Left: Emoji alone without circle & Category/Note */}
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <span className="text-xl shrink-0">{category.emoji}</span>
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => setActiveDetailEntry(entry)}
+                        className="group w-full min-h-[44px] flex items-center justify-between py-3 px-2 text-left cursor-pointer hover:bg-[var(--bg-elevated)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded-xl transition-colors gap-2"
+                      >
+                        {/* Left: Category Emoji & Merchant/Note + Dual Currency or Category Subline */}
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <span className="text-xl shrink-0" aria-hidden="true">
+                            {category.emoji}
+                          </span>
 
-                        <div className="truncate">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-semibold text-[var(--text-primary)] truncate">
-                              {category.name}
-                            </span>
-                            {entry.recurringId && (
-                              <span className="text-xs text-[var(--accent)] font-bold shrink-0" title="Recurring entry">
-                                ↻
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-xs sm:text-[13px] font-semibold text-[var(--text-primary)] truncate">
+                                {row.title}
                               </span>
-                            )}
-                            {entry.isSample && (
-                              <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-[var(--bg-elevated)] text-[var(--text-secondary)]">
-                                Sample
-                              </span>
-                            )}
+                              {entry.recurringId && (
+                                <span
+                                  className="text-xs text-[var(--accent)] font-bold shrink-0"
+                                  title="Recurring entry"
+                                >
+                                  ↻
+                                </span>
+                              )}
+                            </div>
+
+                            {row.isForeign && row.conversionLine ? (
+                              <p className="text-[11px] text-[var(--text-secondary)] tabular-nums truncate mt-0.5">
+                                {row.conversionLine}
+                              </p>
+                            ) : row.secondaryContext ? (
+                              <p className="text-[11px] text-[var(--text-secondary)] truncate mt-0.5">
+                                {row.secondaryContext}
+                              </p>
+                            ) : null}
                           </div>
-
-                          {entry.note ? (
-                            <p className="text-[11px] text-[var(--text-secondary)] truncate">
-                              {entry.note}
-                            </p>
-                          ) : isForeign ? (
-                            <p className="text-[11px] text-[var(--text-secondary)]">
-                              {formatCents(entry.amount, entry.currency)}
-                            </p>
-                          ) : null}
                         </div>
-                      </div>
 
-                      {/* Right: Home Currency Amount (expenses normal text, income green) */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        {entry.photoUrl && <Camera className="w-3.5 h-3.5 text-[var(--text-secondary)]" />}
+                        {/* Right: Home Currency Amount (expenses primary, income green with +) */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {entry.photoUrl && (
+                            <Camera className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                          )}
 
-                        <span
-                          className={`text-xs sm:text-sm font-semibold tabular-nums ${
-                            isIncome ? 'text-[var(--income)]' : 'text-[var(--text-primary)]'
-                          }`}
-                        >
-                          {isIncome ? '+' : ''}
-                          {formatCents(entry.homeAmount ?? entry.amount, settings.homeCurrency)}
-                        </span>
+                          <span
+                            className={`text-xs sm:text-sm font-semibold tabular-nums ${
+                              row.isIncome ? 'text-[var(--income)]' : 'text-[var(--text-primary)]'
+                            }`}
+                          >
+                            {row.primaryAmountText}
+                          </span>
 
-                        <ChevronRight className="w-4 h-4 text-[var(--text-secondary)]/50 group-hover:text-[var(--text-secondary)]" />
-                      </div>
-                    </div>
-                  );
-                })}
+                          <ChevronRight className="w-4 h-4 text-[var(--text-secondary)]/50 group-hover:text-[var(--text-secondary)]" />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Detail Sheet / Dialog on Tap (Pass 4 target) */}
+      {/* Detail Sheet / Dialog on Tap, Click, or Keyboard Activation */}
       <AdaptiveModal
         id="entry_list_detail_sheet"
         isOpen={Boolean(activeDetailEntry)}
@@ -202,27 +219,30 @@ export const EntryList: React.FC<EntryListProps> = ({
       >
         {activeDetailEntry && (() => {
           const category = getCategory(activeDetailEntry.categoryId, activeDetailEntry.type);
-          const isForeign = activeDetailEntry.currency.toUpperCase() !== settings.homeCurrency.toUpperCase();
-          const formattedHomeAmt = formatCents(activeDetailEntry.homeAmount ?? activeDetailEntry.amount, settings.homeCurrency);
-          const formattedForeignAmt = formatCents(activeDetailEntry.amount, activeDetailEntry.currency);
-          const rateStatusText = activeDetailEntry.rateStatus === 'fetched'
-            ? `Rate from ${formatTransactionDate(activeDetailEntry.date).split(', ')[1] || activeDetailEntry.date}`
-            : activeDetailEntry.rateStatus === 'estimated'
-            ? 'Estimated rate'
-            : 'Manual rate';
+          const detail = buildEntryDetailPresentation(activeDetailEntry, settings.homeCurrency);
+          const trimmedNote = activeDetailEntry.note?.trim();
 
           return (
             <div className="p-6 space-y-6 overflow-y-auto flex-1 flex flex-col justify-between">
               <div className="space-y-5">
-                {/* Header: Headline amount & conversion line */}
-                <div className="flex items-center justify-between pb-4 border-b border-[var(--border-subtle)]">
-                  <div>
-                    <h3 className="text-3xl font-extrabold tabular-nums text-[var(--text-primary)] tracking-tight">
-                      {formattedHomeAmt}
+                {/* Header: Headline amount, title, & conversion summary */}
+                <div className="flex items-start justify-between pb-4 border-b border-[var(--border-subtle)] gap-3">
+                  <div className="min-w-0">
+                    {trimmedNote && (
+                      <p className="text-xs font-semibold text-[var(--text-secondary)] truncate mb-1">
+                        {trimmedNote}
+                      </p>
+                    )}
+                    <h3
+                      className={`text-3xl font-extrabold tabular-nums tracking-tight ${
+                        detail.isIncome ? 'text-[var(--income)]' : 'text-[var(--text-primary)]'
+                      }`}
+                    >
+                      {detail.headlineAmountText}
                     </h3>
-                    {isForeign && (
-                      <p className="text-xs text-[var(--text-secondary)] mt-1">
-                        {formattedForeignAmt} · 1 {activeDetailEntry.currency} = {activeDetailEntry.rate.toFixed(2)} {settings.homeCurrency}
+                    {detail.isForeign && (
+                      <p className="text-xs text-[var(--text-secondary)] tabular-nums mt-1">
+                        {detail.originalAmountText} · {detail.rateDirectionText}
                       </p>
                     )}
                   </div>
@@ -230,33 +250,80 @@ export const EntryList: React.FC<EntryListProps> = ({
                   <button
                     type="button"
                     onClick={() => setActiveDetailEntry(null)}
-                    className="p-1.5 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] transition-colors cursor-pointer self-start"
+                    aria-label="Close transaction details"
+                    className="p-1.5 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] transition-colors cursor-pointer shrink-0"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                {/* Rate status line for foreign entries: plain text with no background, no border */}
-                {isForeign && (
-                  <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] py-1">
-                    <span>{rateStatusText}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const entry = activeDetailEntry;
-                        setActiveDetailEntry(null);
-                        onEdit(entry);
-                      }}
-                      className="font-semibold text-[var(--accent)] hover:underline cursor-pointer"
-                    >
-                      Edit rate
-                    </button>
-                  </div>
-                )}
-
                 {/* Plain label/value rows with hairline dividers */}
                 <div className="divide-y divide-[var(--border-subtle)] text-xs">
-                  <div className="py-3 flex items-center justify-between">
+                  {detail.isForeign && (
+                    <>
+                      <div className="py-3 flex items-center justify-between gap-3">
+                        <span className="text-[var(--text-secondary)]">Original amount</span>
+                        <span className="font-semibold text-[var(--text-primary)] tabular-nums">
+                          {detail.originalAmountText}
+                        </span>
+                      </div>
+
+                      <div className="py-3 flex items-center justify-between gap-3">
+                        <span className="text-[var(--text-secondary)]">Home equivalent</span>
+                        <span className="font-semibold text-[var(--text-primary)] tabular-nums">
+                          {detail.homeEquivalentText}
+                        </span>
+                      </div>
+
+                      <div className="py-3 flex items-center justify-between gap-3">
+                        <span className="text-[var(--text-secondary)]">Exchange rate</span>
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-semibold text-[var(--text-primary)] tabular-nums">
+                            {detail.rateDirectionText}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const entry = activeDetailEntry;
+                              setActiveDetailEntry(null);
+                              onEdit(entry);
+                            }}
+                            className="font-semibold text-[var(--accent)] hover:underline cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="py-3 flex items-center justify-between gap-3">
+                        <span className="text-[var(--text-secondary)]">Rate date</span>
+                        <span
+                          className={
+                            activeDetailEntry.rateDate
+                              ? 'font-semibold text-[var(--text-primary)]'
+                              : 'text-[var(--text-secondary)]'
+                          }
+                        >
+                          {detail.rateDateText}
+                        </span>
+                      </div>
+
+                      <div className="py-3 flex items-center justify-between gap-3">
+                        <span className="text-[var(--text-secondary)]">Rate source</span>
+                        <span
+                          className={
+                            activeDetailEntry.rateSource
+                              ? 'font-semibold text-[var(--text-primary)]'
+                              : 'text-[var(--text-secondary)]'
+                          }
+                        >
+                          {detail.rateSourceText}
+                        </span>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="py-3 flex items-center justify-between gap-3">
                     <span className="text-[var(--text-secondary)]">Category</span>
                     <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
                       <span>{category.emoji}</span>
@@ -264,21 +331,27 @@ export const EntryList: React.FC<EntryListProps> = ({
                     </div>
                   </div>
 
-                  <div className="py-3 flex items-center justify-between">
+                  <div className="py-3 flex items-center justify-between gap-3">
                     <span className="text-[var(--text-secondary)]">Date</span>
                     <span className="font-semibold text-[var(--text-primary)]">
                       {formatTransactionDate(activeDetailEntry.date)}
                     </span>
                   </div>
 
-                  <div className="py-3 flex items-center justify-between">
+                  <div className="py-3 flex items-center justify-between gap-3">
                     <span className="text-[var(--text-secondary)]">Note</span>
-                    <span className={activeDetailEntry.note ? 'font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)] italic'}>
-                      {activeDetailEntry.note || 'Add a note'}
+                    <span
+                      className={
+                        trimmedNote
+                          ? 'font-semibold text-[var(--text-primary)] text-right'
+                          : 'text-[var(--text-secondary)] italic'
+                      }
+                    >
+                      {trimmedNote || 'No note'}
                     </span>
                   </div>
 
-                  <div className="py-3 flex items-center justify-between">
+                  <div className="py-3 flex items-center justify-between gap-3">
                     <span className="text-[var(--text-secondary)]">Receipt</span>
                     {activeDetailEntry.photoUrl ? (
                       <button
@@ -304,7 +377,7 @@ export const EntryList: React.FC<EntryListProps> = ({
                   </div>
 
                   {/* Repeat row */}
-                  <div className="py-3 flex items-center justify-between">
+                  <div className="py-3 flex items-center justify-between gap-3">
                     <span className="text-[var(--text-secondary)]">Repeat</span>
                     <button
                       type="button"
@@ -319,7 +392,9 @@ export const EntryList: React.FC<EntryListProps> = ({
                     >
                       {activeDetailEntry.recurringId
                         ? (() => {
-                            const rule = recurringRules?.find((r) => r.id === activeDetailEntry.recurringId);
+                            const rule = recurringRules?.find(
+                              (r) => r.id === activeDetailEntry.recurringId
+                            );
                             if (!rule) return 'Repeats';
                             if (rule.frequency === 'weekly') return 'Repeats weekly';
                             if (rule.frequency === 'biweekly') return 'Repeats every 2 weeks';

@@ -73,6 +73,7 @@ export interface RateResult {
   rate: number;
   rateStatus: RateStatus;
   source: string;
+  rateDate?: string;
 }
 
 /**
@@ -118,12 +119,16 @@ export async function getExchangeRate(
       if (response.ok) {
         const data = await response.json();
         const rate = data.rates?.[to];
+        const returnedDate = typeof data.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.date)
+          ? data.date
+          : queryDate;
         if (typeof rate === 'number' && rate > 0) {
-          setRateCache(from, to, rate, data.date || queryDate);
+          setRateCache(from, to, rate, returnedDate);
           return {
             rate,
             rateStatus: 'fetched',
             source: 'Frankfurter',
+            rateDate: returnedDate,
           };
         }
       }
@@ -152,6 +157,7 @@ export async function getExchangeRate(
             // For entries dated today, mark 'fetched'; for older entries, mark 'estimated'
             rateStatus: isToday ? 'fetched' : 'estimated',
             source: 'ExchangeRate-API',
+            rateDate: todayKey,
           };
         }
       }
@@ -168,6 +174,7 @@ export async function getExchangeRate(
       rate: cached.rate,
       rateStatus: 'estimated', // Rate came from cache, marked estimated
       source: 'Cache',
+      rateDate: cached.date,
     };
   }
 

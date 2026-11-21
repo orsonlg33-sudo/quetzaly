@@ -86,7 +86,7 @@ async function run() {
   // A. Snapshot BEFORE
   const before = await getSnapshot();
   assert.equal(before.homeCurrency, BACKUP_HOME_CURRENCY, 'Initial test DB must be MXN');
-  assert.equal(before.entryCount, 11, 'Expected 11 seeded entries');
+  assert.equal(before.entryCount, sampleEntries.length, `Expected ${sampleEntries.length} seeded entries`);
   console.log('1. BEFORE EXPORT:');
   console.log(`   - Entry count: ${before.entryCount}`);
   console.log(`   - Category count: ${before.categoryCount}`);

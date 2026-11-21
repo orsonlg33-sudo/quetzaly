@@ -21,6 +21,10 @@ export interface FinanceEntry {
   rateStatus: RateStatus;
   /** Whether the user manually edited this rate */
   rateEditedManually: boolean;
+  /** Date of the saved exchange rate (YYYY-MM-DD), when recorded */
+  rateDate?: string;
+  /** Origin of the saved exchange rate (e.g. 'Frankfurter', 'ExchangeRate-API', 'Manual'), when recorded */
+  rateSource?: string;
   /** Transaction date in YYYY-MM-DD format */
   date: string;
   /** Reference to Category id */
@@ -55,6 +59,8 @@ export interface RecurringRule {
   active: boolean; // true = active, false = paused
   autoAdd: boolean; // default false
   monthlyDay?: number; // 1 to 31 for monthly rules
+  /** Optional marker if loaded from sample test data */
+  isSample?: boolean;
   createdAt: number;
   updatedAt: number;
   lastGeneratedDate?: string; // YYYY-MM-DD
@@ -66,6 +72,8 @@ export interface RecurringOccurrence {
   date: string; // YYYY-MM-DD
   status: 'posted' | 'skipped';
   entryId?: string;
+  /** Optional marker if loaded from sample test data */
+  isSample?: boolean;
   updatedAt: number;
 }
 
@@ -138,6 +146,8 @@ export interface BudgetLimit {
   categoryId?: string; // undefined for overall budget limit
   periodId?: string; // undefined for repeating default; periodId for one-time period override
   amount: number; // in integer cents in home currency
+  /** Optional marker if loaded from sample test data */
+  isSample?: boolean;
   createdAt: number;
   updatedAt: number;
 }

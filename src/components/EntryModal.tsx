@@ -15,7 +15,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { Category, FinanceEntry, TransactionType, UserSettings, RateStatus } from '../types/finance';
-import { decimalStringToCents, centsToDecimalString, formatCents, getCurrencyConfig, formatTransactionDate } from '../lib/currency';
+import { decimalStringToCents, centsToDecimalString, formatCents, formatExchangeRate, getCurrencyConfig, formatTransactionDate } from '../lib/currency';
 import { useModalStack } from '../lib/modalStack';
 import { compressReceiptImage } from '../lib/imageCompressor';
 import { formatDateKey } from '../lib/periodMath';
@@ -61,7 +61,11 @@ export const EntryModal: React.FC<EntryModalProps> = ({
   // Rate state
   const [rate, setRate] = useState<number>(1.0);
   const [rateStatus, setRateStatus] = useState<RateStatus>('fetched');
+  const [rateDate, setRateDate] = useState<string | undefined>(undefined);
+  const [rateSource, setRateSource] = useState<string | undefined>(undefined);
   const [isManualRate, setIsManualRate] = useState<boolean>(false);
+  const [didEditManualRate, setDidEditManualRate] = useState<boolean>(false);
+  const [preserveEditingRate, setPreserveEditingRate] = useState<boolean>(false);
   const [manualRateInput, setManualRateInput] = useState<string>('1.0');
   const [isLoadingRate, setIsLoadingRate] = useState<boolean>(false);
   const [isPickerOpen, setIsPickerOpen] = useState<boolean>(false);
@@ -94,8 +98,16 @@ export const EntryModal: React.FC<EntryModalProps> = ({
         setPhotoUrl(editingEntry.photoUrl);
 
         const isManual = Boolean(editingEntry.rateEditedManually || editingEntry.rateStatus === 'manual');
+        const hasValidSavedRate =
+          editingEntry.currency.toUpperCase() !== settings.homeCurrency.toUpperCase() &&
+          editingEntry.rate > 0 &&
+          editingEntry.rateStatus !== 'pending';
         setIsManualRate(isManual);
+        setDidEditManualRate(false);
+        setPreserveEditingRate(hasValidSavedRate);
         setRate(editingEntry.rate || 1.0);
+        setRateDate(editingEntry.rateDate);
+        setRateSource(editingEntry.rateSource);
         setManualRateInput(String(editingEntry.rate || 1.0));
         setRateStatus(editingEntry.rateStatus || 'fetched');
         setStep(1);
@@ -107,7 +119,11 @@ export const EntryModal: React.FC<EntryModalProps> = ({
         setNote('');
         setPhotoUrl(undefined);
         setIsManualRate(false);
+        setDidEditManualRate(false);
+        setPreserveEditingRate(false);
         setRate(1.0);
+        setRateDate(undefined);
+        setRateSource(undefined);
         setManualRateInput('1.0');
         setRateStatus('fetched');
         setSelectedCategoryId('');
@@ -124,10 +140,14 @@ export const EntryModal: React.FC<EntryModalProps> = ({
       setRate(1.0);
       setRateStatus('fetched');
       setIsManualRate(false);
+      setDidEditManualRate(false);
+      setPreserveEditingRate(false);
+      setRateDate(undefined);
+      setRateSource(undefined);
       return;
     }
 
-    if (isManualRate) return;
+    if (isManualRate || preserveEditingRate) return;
 
     let isCancelled = false;
     async function fetchRate() {
@@ -137,12 +157,16 @@ export const EntryModal: React.FC<EntryModalProps> = ({
         if (!isCancelled) {
           setRate(res.rate);
           setRateStatus(res.rateStatus);
+          setRateDate(res.rateDate);
+          setRateSource(res.rate > 0 ? res.source : undefined);
           setManualRateInput(res.rate > 0 ? String(res.rate) : '1.0');
         }
       } catch {
         if (!isCancelled) {
           setRate(0);
           setRateStatus('pending');
+          setRateDate(undefined);
+          setRateSource(undefined);
         }
       } finally {
         if (!isCancelled) setIsLoadingRate(false);
@@ -153,7 +177,7 @@ export const EntryModal: React.FC<EntryModalProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [currency, dateStr, settings.homeCurrency, isManualRate, isOpen]);
+  }, [currency, dateStr, settings.homeCurrency, isManualRate, preserveEditingRate, isOpen]);
 
   const requestClose = useCallback(() => {
     const hasTypedAmount = amountStr !== '0' && amountStr !== '' && amountStr !== '0.00';
@@ -314,17 +338,25 @@ export const EntryModal: React.FC<EntryModalProps> = ({
     let finalRate = rate;
     let finalStatus: RateStatus = rateStatus;
     let finalManual = isManualRate;
+    let finalRateDate = rateDate;
+    let finalRateSource = rateSource;
 
     if (!isForeign) {
       finalRate = 1.0;
       finalStatus = 'fetched';
       finalManual = false;
+      finalRateDate = undefined;
+      finalRateSource = undefined;
     } else if (isManualRate) {
       const parsedManual = parseFloat(manualRateInput);
       if (!isNaN(parsedManual) && parsedManual > 0) {
         finalRate = parsedManual;
         finalStatus = 'manual';
         finalManual = true;
+        if (didEditManualRate) {
+          finalRateDate = formatDateKey(new Date());
+          finalRateSource = 'Manual';
+        }
       }
     }
 
@@ -341,6 +373,8 @@ export const EntryModal: React.FC<EntryModalProps> = ({
       rate: finalRate,
       rateStatus: finalStatus,
       rateEditedManually: finalManual,
+      rateDate: finalRateDate,
+      rateSource: finalRateSource,
       date: dateStr,
       categoryId: catId,
       note: note.trim() || undefined,
@@ -498,7 +532,7 @@ export const EntryModal: React.FC<EntryModalProps> = ({
                     <span>≈ {formattedHomeAmount}</span>
                     <span>·</span>
                     <span className="underline decoration-[var(--border-subtle)] underline-offset-2">
-                      1 {currency} = {activeRateValue > 0 ? activeRateValue.toFixed(2) : '...'} {settings.homeCurrency}
+                      1 {currency} = {activeRateValue > 0 ? formatExchangeRate(activeRateValue) : '...'} {settings.homeCurrency}
                     </span>
                   </button>
                 )}
@@ -724,7 +758,12 @@ export const EntryModal: React.FC<EntryModalProps> = ({
         isOpen={showDateSheet}
         onClose={() => setShowDateSheet(false)}
         selectedDate={dateStr}
-        onSelectDate={(d) => setDateStr(d)}
+        onSelectDate={(d) => {
+          setDateStr(d);
+          if (editingEntry && d !== editingEntry.date) {
+            setPreserveEditingRate(false);
+          }
+        }}
         title="Transaction date"
       />
 
@@ -781,6 +820,8 @@ export const EntryModal: React.FC<EntryModalProps> = ({
                 onChange={(e) => {
                   setManualRateInput(e.target.value);
                   setIsManualRate(true);
+                  setDidEditManualRate(true);
+                  setPreserveEditingRate(false);
                 }}
                 className="flex-1 px-3 py-2 text-xs font-bold rounded-xl bg-[var(--bg-elevated)] text-[var(--text-primary)] border border-[var(--border-subtle)]"
               />
@@ -791,6 +832,8 @@ export const EntryModal: React.FC<EntryModalProps> = ({
                 type="button"
                 onClick={() => {
                   setIsManualRate(false);
+                  setDidEditManualRate(false);
+                  setPreserveEditingRate(false);
                   setShowEditRateSheet(false);
                 }}
                 className="px-3 py-2 text-xs font-medium text-[var(--text-secondary)]"
@@ -817,7 +860,14 @@ export const EntryModal: React.FC<EntryModalProps> = ({
         selectedCurrency={currency}
         homeCurrency={settings.homeCurrency}
         recentCurrencies={settings.recentCurrencies || []}
-        onSelect={(code) => setCurrency(code)}
+        onSelect={(code) => {
+          setCurrency(code);
+          if (editingEntry && code.toUpperCase() !== editingEntry.currency.toUpperCase()) {
+            setPreserveEditingRate(false);
+            setIsManualRate(false);
+            setDidEditManualRate(false);
+          }
+        }}
         title="Currency"
       />
     </>

@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useLayoutEffect } from 'react';
 import { BudgetPeriod, FinanceEntry, UserSettings } from '../types/finance';
 import { formatCents, APP_LOCALE } from '../lib/currency';
 import { parseDateKey, formatDateKey } from '../lib/periodMath';
+import { computeDailyChartLabelsLayout } from '../lib/chartLabels';
 import {
   calculateDailyAverageMetrics,
   getCycleDayMetrics,
@@ -30,7 +31,30 @@ export const DailyBarChart: React.FC<DailyBarChartProps> = ({
   onSelectDateFilter,
 }) => {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [chartWidthPx, setChartWidthPx] = useState<number>(328);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const updateWidth = () => {
+      const nextWidth = el.clientWidth;
+      if (nextWidth > 0) {
+        setChartWidthPx(nextWidth);
+      }
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => {
+        updateWidth();
+      });
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+  }, []);
 
   const currency = settings.homeCurrency;
 
@@ -123,9 +147,20 @@ export const DailyBarChart: React.FC<DailyBarChartProps> = ({
 
   const activeIndex = hoveredIndex;
   const activeDay = activeIndex !== null ? daysData[activeIndex] : null;
+  const activeCenterPct =
+    activeIndex !== null && daysData.length > 0
+      ? ((activeIndex + 0.5) / daysData.length) * 100
+      : 50;
 
-  // Exact horizontal position for "Today" axis label under today's bar
-  const todayPositionPct = todayIndex >= 0 ? ((todayIndex + 0.5) / totalDays) * 100 : 66.6;
+  const startDateLabel = daysData[0]?.shortMonthDay ?? '';
+  const endDateLabel = daysData[daysData.length - 1]?.shortMonthDay ?? '';
+  const axisLayout = computeDailyChartLabelsLayout({
+    totalDays: daysData.length,
+    todayIndex,
+    startDateLabel,
+    endDateLabel,
+    containerWidthPx: chartWidthPx,
+  });
 
   return (
     <div className="w-full flex flex-col gap-2 py-3 select-none">
@@ -146,13 +181,19 @@ export const DailyBarChart: React.FC<DailyBarChartProps> = ({
 
       {/* Chart Plotting Area directly on canvas */}
       <div className="relative pt-8 pb-1">
-        {/* Dark Tooltip when dragging/tapping */}
+        {/* Dark Tooltip when dragging/tapping, anchored inside chart edges */}
         {activeDay && activeIndex !== null && (
           <div
-            className="absolute top-0 -translate-x-1/2 pointer-events-none transition-all duration-75 z-20"
-            style={{
-              left: `${((activeIndex + 0.5) / daysData.length) * 100}%`,
-            }}
+            className={`absolute top-0 pointer-events-none transition-all duration-75 z-20 ${
+              activeCenterPct < 22 || activeCenterPct > 78 ? '' : '-translate-x-1/2'
+            }`}
+            style={
+              activeCenterPct < 22
+                ? { left: 0 }
+                : activeCenterPct > 78
+                ? { right: 0 }
+                : { left: `${activeCenterPct}%` }
+            }
           >
             <div className="bg-[#14150F] text-[#F2F1EA] dark:bg-[#222520] dark:text-[#F2F1EA] text-[10px] font-semibold px-2 py-1 rounded-md shadow-lg whitespace-nowrap border border-white/10">
               {activeDay.formattedDateLabel} · {formatCents(activeDay.totalCents, currency)}
@@ -217,26 +258,45 @@ export const DailyBarChart: React.FC<DailyBarChartProps> = ({
           })}
         </div>
 
-        {/* Three Axis Labels: start date on left, "Today" under today's bar, end date on right */}
+        {/* Axis Labels: non-overlapping start, Today, and end labels inside chart bounds */}
         <div className="relative w-full h-6 pt-2 text-[11px] font-medium text-[var(--text-secondary)]">
-          <span className="absolute left-0 bottom-0">
-            {daysData[0]?.shortMonthDay}
-          </span>
-
-          {todayIndex >= 0 && (
-            <span
-              className="absolute -translate-x-1/2 bottom-0 font-semibold text-[var(--text-primary)]"
-              style={{ left: `${todayPositionPct}%` }}
-            >
-              Today
+          {axisLayout.showStart && (
+            <span className="absolute left-0 bottom-0 whitespace-nowrap">
+              {axisLayout.startIsTodayCombined ? (
+                <>
+                  <span className="font-semibold text-[var(--text-primary)]">Today</span>
+                  <span> · {startDateLabel}</span>
+                </>
+              ) : (
+                axisLayout.startText
+              )}
             </span>
           )}
 
-          <span className="absolute right-0 bottom-0">
-            {daysData[daysData.length - 1]?.shortMonthDay}
-          </span>
+          {axisLayout.showToday && (
+            <span
+              className="absolute bottom-0 whitespace-nowrap font-semibold text-[var(--text-primary)]"
+              style={{ left: `${axisLayout.todayLeftPx}px` }}
+            >
+              {axisLayout.todayText}
+            </span>
+          )}
+
+          {axisLayout.showEnd && (
+            <span className="absolute right-0 bottom-0 whitespace-nowrap">
+              {axisLayout.endIsTodayCombined ? (
+                <>
+                  <span className="font-semibold text-[var(--text-primary)]">Today</span>
+                  <span> · {endDateLabel}</span>
+                </>
+              ) : (
+                axisLayout.endText
+              )}
+            </span>
+          )}
         </div>
       </div>
     </div>
   );
 };
+

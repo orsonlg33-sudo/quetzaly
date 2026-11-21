@@ -113,12 +113,28 @@ export function getCurrencyConfig(code: string): CurrencyConfig {
 }
 
 /**
+ * Shared display rule for monetary amounts: omit decimals when the fractional
+ * portion is all zeros (e.g. MXN 16,500.00 -> MXN 16,500), and keep the
+ * currency's standard fractional precision when non-zero (e.g. GBP 18.50).
+ */
+function getEffectiveDisplayFractionDigits(
+  minorUnits: number,
+  currencyDecimals: number,
+  forceDecimals?: boolean
+): number {
+  if (currencyDecimals === 0) return 0;
+  if (forceDecimals) return currencyDecimals;
+  const roundedMinorUnits = Math.round(Math.abs(minorUnits));
+  return roundedMinorUnits % 100 === 0 ? 0 : currencyDecimals;
+}
+
+/**
  * Formats integer cents into a localized string with symbol and proper decimals using
  * Intl.NumberFormat ('en-US', currencyDisplay: 'symbol').
  * - Mexican Peso shows as "MX$"
  * - Euro shows as "€" before the amount
- * - Currencies without a symbol show their ISO code (e.g. "GTQ 400.00")
- * - Never shows a bare "$" for anything except USD.
+ * - Currencies without a symbol show their ISO code (e.g. "GTQ 400")
+ * - Whole amounts drop trailing zero decimals ("MX$450"); fractional amounts keep precision ("MX$532.26").
  */
 export function formatCents(
   cents: number,
@@ -135,14 +151,13 @@ export function formatCents(
   const targetCents = options.abs ? Math.abs(cents) : cents;
   const isPositive = targetCents > 0;
 
-  const decimalValue = targetCents / (decimals === 0 ? 1 : 100);
-
-  // Universal rule: whole amounts show no decimals ("MX$450"),
-  // amounts with cents show two decimals ("MX$2,049.12").
-  const isWhole = Math.abs(cents) % 100 === 0;
-  const shouldDropZero = !options.forceDecimals && isWhole;
-  const minDecimals = shouldDropZero ? 0 : decimals;
-  const maxDecimals = shouldDropZero ? 0 : decimals;
+  const displayDecimals = getEffectiveDisplayFractionDigits(
+    targetCents,
+    decimals,
+    options.forceDecimals
+  );
+  const roundedMinor = Math.round(targetCents);
+  const decimalValue = roundedMinor / (decimals === 0 ? 1 : 100);
 
   let formatted = '';
   try {
@@ -150,17 +165,67 @@ export function formatCents(
       style: 'currency',
       currency: code,
       currencyDisplay: 'symbol',
-      minimumFractionDigits: minDecimals,
-      maximumFractionDigits: maxDecimals,
+      minimumFractionDigits: displayDecimals,
+      maximumFractionDigits: displayDecimals,
     }).format(decimalValue);
   } catch {
-    formatted = `${code} ${minDecimals === 0 ? Math.round(decimalValue) : decimalValue.toFixed(decimals)}`;
+    formatted = `${code} ${displayDecimals === 0 ? Math.round(decimalValue) : decimalValue.toFixed(displayDecimals)}`;
   }
 
   if (options.showSign && isPositive) {
     return `+${formatted}`;
   }
   return formatted;
+}
+
+/**
+ * Formats integer cents with an explicit ISO currency code (e.g. "MXN 450", "GBP 18.50"),
+ * avoiding ambiguous currency symbols like "$". Whole amounts omit all-zero decimals.
+ */
+export function formatCodeAmount(
+  cents: number,
+  currencyCode: string = 'USD',
+  options: {
+    showSign?: boolean;
+    abs?: boolean;
+    forceDecimals?: boolean;
+  } = {}
+): string {
+  const code = (currencyCode || 'USD').toUpperCase();
+  const decimals = getCurrencyDecimals(code);
+  const rawCents = options.abs ? Math.abs(cents) : cents;
+  const isNegative = rawCents < 0;
+  const isPositive = rawCents > 0;
+  const displayDecimals = getEffectiveDisplayFractionDigits(
+    rawCents,
+    decimals,
+    options.forceDecimals
+  );
+  const roundedAbsMinor = Math.round(Math.abs(rawCents));
+  const absValue = roundedAbsMinor / (decimals === 0 ? 1 : 100);
+
+  let numberStr = '';
+  try {
+    numberStr = new Intl.NumberFormat(APP_LOCALE, {
+      minimumFractionDigits: displayDecimals,
+      maximumFractionDigits: displayDecimals,
+    }).format(absValue);
+  } catch {
+    numberStr =
+      displayDecimals === 0 ? String(Math.round(absValue)) : absValue.toFixed(displayDecimals);
+  }
+
+  const signPrefix = isNegative ? '-' : options.showSign && isPositive ? '+' : '';
+  return `${signPrefix}${code} ${numberStr}`;
+}
+
+/**
+ * Formats a conversion rate clearly (e.g. 0.04 -> "0.0400", 20.8 -> "20.8000").
+ */
+export function formatExchangeRate(rate: number): string {
+  if (!Number.isFinite(rate) || rate <= 0) return '0.0000';
+  if (rate < 0.0001) return rate.toPrecision(4);
+  return rate.toFixed(4);
 }
 
 export function decimalStringToCents(val: string): number {

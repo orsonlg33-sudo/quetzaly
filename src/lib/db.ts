@@ -4,7 +4,7 @@
  */
 
 import { Category, FinanceEntry, UserSettings, BudgetLimit, RecurringRule, RecurringOccurrence } from '../types/finance';
-import { DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from './defaults';
+import { DEFAULT_CATEGORIES, DEFAULT_SETTINGS, generateCrossBorderSampleData } from './defaults';
 
 const DB_NAME = 'kumo_finance_db';
 const DB_VERSION = 3;
@@ -208,6 +208,90 @@ export async function clearSampleEntries(): Promise<number> {
   });
 }
 
+/**
+ * Removes all sample-owned records (entries, limits, recurring rules, and recurring occurrences)
+ * strictly checking `isSample === true` so user records are never touched.
+ */
+export async function clearAllSampleData(): Promise<{
+  entries: number;
+  limits: number;
+  recurring: number;
+  recurringOccurrences: number;
+}> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(
+      ['entries', 'limits', 'recurring', 'recurring_occurrences'],
+      'readwrite'
+    );
+    const counts = {
+      entries: 0,
+      limits: 0,
+      recurring: 0,
+      recurringOccurrences: 0,
+    };
+
+    const deleteSampleInStore = (
+      storeName: 'entries' | 'limits' | 'recurring' | 'recurring_occurrences',
+      counterKey: keyof typeof counts
+    ) => {
+      const store = tx.objectStore(storeName);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          const val = cursor.value as { isSample?: boolean };
+          if (val && val.isSample === true) {
+            cursor.delete();
+            counts[counterKey]++;
+          }
+          cursor.continue();
+        }
+      };
+      req.onerror = () => reject(req.error);
+    };
+
+    deleteSampleInStore('entries', 'entries');
+    deleteSampleInStore('limits', 'limits');
+    deleteSampleInStore('recurring', 'recurring');
+    deleteSampleInStore('recurring_occurrences', 'recurringOccurrences');
+
+    tx.oncomplete = () => resolve(counts);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Loads cross-border sample data idempotently into IndexedDB without duplicating
+ * existing sample records and without altering any user-owned entries, limits, or rules.
+ */
+export async function loadCrossBorderSampleToDB(
+  homeCurrency: string,
+  monthStartDay: number,
+  now: Date = new Date()
+): Promise<{
+  entries: FinanceEntry[];
+  recurringRules: RecurringRule[];
+  limits: BudgetLimit[];
+}> {
+  const bundle = generateCrossBorderSampleData(homeCurrency, undefined, monthStartDay, now);
+
+  await Promise.all([
+    bulkAddEntries(bundle.entries),
+    bulkPutRecurringRules(bundle.recurringRules),
+    bulkSaveRecurringOccurrences(bundle.recurringOccurrences),
+    bulkPutLimits(bundle.limits),
+  ]);
+
+  const [entries, recurringRules, limits] = await Promise.all([
+    getAllEntries(),
+    getAllRecurringRules(),
+    getAllLimits(),
+  ]);
+
+  return { entries, recurringRules, limits };
+}
+
 /* -------------------- Categories -------------------- */
 
 export async function getAllCategories(): Promise<Category[]> {
@@ -375,6 +459,20 @@ export async function deleteLimit(id: string): Promise<void> {
   });
 }
 
+export async function bulkPutLimits(limits: BudgetLimit[]): Promise<void> {
+  if (limits.length === 0) return;
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('limits', 'readwrite');
+    const store = tx.objectStore('limits');
+    for (const limit of limits) {
+      store.put(limit);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 /* -------------------- Recurring Rules -------------------- */
 
 export async function getAllRecurringRules(): Promise<RecurringRule[]> {
@@ -410,6 +508,20 @@ export async function deleteRecurringRule(id: string): Promise<void> {
 
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
+  });
+}
+
+export async function bulkPutRecurringRules(rules: RecurringRule[]): Promise<void> {
+  if (rules.length === 0) return;
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('recurring', 'readwrite');
+    const store = tx.objectStore('recurring');
+    for (const rule of rules) {
+      store.put(rule);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -558,7 +670,11 @@ export async function migrateExistingEntries(homeCurrency: string): Promise<Fina
  */
 export async function refreshPendingRates(
   homeCurrency: string,
-  getRateFn: (from: string, to: string, date?: string) => Promise<{ rate: number; rateStatus: any }>
+  getRateFn: (
+    from: string,
+    to: string,
+    date?: string
+  ) => Promise<{ rate: number; rateStatus: any; source?: string; rateDate?: string }>
 ): Promise<{ updated: FinanceEntry[]; convertedCount: number }> {
   const entries = await getAllEntries();
   const candidates = entries.filter(
@@ -580,6 +696,8 @@ export async function refreshPendingRates(
         item.rate = res.rate;
         item.homeAmount = Math.round(item.amount * res.rate);
         item.rateStatus = res.rateStatus;
+        item.rateDate = res.rateDate;
+        item.rateSource = res.source;
         await updateEntry(item);
         convertedCount++;
       }
@@ -598,7 +716,11 @@ export async function refreshPendingRates(
  */
 export async function recomputeAllEntriesForNewHomeCurrency(
   newHomeCurrency: string,
-  getRateFn: (from: string, to: string, date?: string) => Promise<{ rate: number; rateStatus: any }>
+  getRateFn: (
+    from: string,
+    to: string,
+    date?: string
+  ) => Promise<{ rate: number; rateStatus: any; source?: string; rateDate?: string }>
 ): Promise<FinanceEntry[]> {
   const entries = await getAllEntries();
 
@@ -609,6 +731,8 @@ export async function recomputeAllEntriesForNewHomeCurrency(
       item.homeAmount = item.amount;
       item.rateStatus = 'fetched';
       item.rateEditedManually = false;
+      item.rateDate = undefined;
+      item.rateSource = undefined;
     } else {
       // Query exchange rate to new home currency
       try {
@@ -617,15 +741,21 @@ export async function recomputeAllEntriesForNewHomeCurrency(
           item.rate = res.rate;
           item.homeAmount = Math.round(item.amount * res.rate);
           item.rateStatus = res.rateStatus;
+          item.rateDate = res.rateDate;
+          item.rateSource = res.source;
         } else {
           item.rate = 0;
           item.homeAmount = 0;
           item.rateStatus = 'pending';
+          item.rateDate = undefined;
+          item.rateSource = undefined;
         }
       } catch {
         item.rate = 0;
         item.homeAmount = 0;
         item.rateStatus = 'pending';
+        item.rateDate = undefined;
+        item.rateSource = undefined;
       }
     }
     await updateEntry(item);

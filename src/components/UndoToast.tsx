@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { RotateCcw, ImagePlus, X, Check } from 'lucide-react';
 import { UndoAction } from '../types/finance';
 
@@ -21,28 +21,35 @@ export const UndoToast: React.FC<UndoToastProps> = ({
   onAddReceiptShortcut,
 }) => {
   const [progress, setProgress] = useState(100);
+  const onDismissRef = useRef(onDismiss);
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
 
   useEffect(() => {
     if (!action) return;
 
     setProgress(100);
     const duration = 5000;
-    const intervalTime = 50;
-    const step = (intervalTime / duration) * 100;
+    const startedAt = Date.now();
 
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev <= step) {
-          clearInterval(timer);
-          onDismiss();
-          return 0;
-        }
-        return prev - step;
-      });
-    }, intervalTime);
+    const progressTimer = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const remaining = Math.max(0, 100 - (elapsed / duration) * 100);
+      setProgress(remaining);
+    }, 50);
 
-    return () => clearInterval(timer);
-  }, [action, onDismiss]);
+    const dismissTimer = setTimeout(() => {
+      clearInterval(progressTimer);
+      onDismissRef.current();
+    }, duration);
+
+    return () => {
+      clearInterval(progressTimer);
+      clearTimeout(dismissTimer);
+    };
+  }, [action]);
 
   if (!action) return null;
 
