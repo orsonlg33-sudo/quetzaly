@@ -75,6 +75,7 @@ import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { BudgetLimitModal } from './components/BudgetLimitModal';
 import { InsightHeader } from './components/InsightHeader';
 import { computeBillReserve } from './lib/billReserveMath';
+import { computeBackupSafety } from './lib/backupSafety';
 import { getCachedRate } from './lib/exchangeRate';
 import { VelocityHeroCard } from './components/VelocityHeroCard';
 import { DailyBarChart } from './components/DailyBarChart';
@@ -536,6 +537,9 @@ export default function App() {
 
       await addEntry(newEntry);
       setEntries((prev) => [newEntry, ...prev]);
+      // The data now matters to someone. Browsers weigh this request against
+      // engagement, so it is made here rather than on first paint.
+      void requestPersistentStorage();
 
       // Remember last used currency and update 4 most recently used currencies
       const currentRecents = settings.recentCurrencies || [];
@@ -902,6 +906,16 @@ export default function App() {
    * occurrence, which is what takes it out of the reserve, so a bill is either held
    * back here or counted as spending, never both.
    */
+  const backupSafety = useMemo(
+    () =>
+      computeBackupSafety({
+        entries,
+        lastBackupAt: settings.lastBackupAt ?? null,
+        dismissedAtCount: settings.backupPromptDismissedAtCount ?? null,
+      }),
+    [entries, settings.lastBackupAt, settings.backupPromptDismissedAtCount]
+  );
+
   const billReserve = useMemo(() => {
     return computeBillReserve({
       rules: recurringRules,
@@ -984,6 +998,38 @@ export default function App() {
         {/* Active Tab Content */}
         {activeTab === 'home' && (
           <>
+            {/* One quiet nudge when a meaningful amount of work exists only here */}
+            {backupSafety.shouldPromptOnHome && (
+              <div className="mb-4 p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[var(--text-primary)]">
+                    {backupSafety.entriesSinceBackup} {backupSafety.entriesSinceBackup === 1 ? 'entry' : 'entries'} exist only on this device
+                  </p>
+                  <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed mt-0.5">
+                    Export a backup from Settings so clearing your browser cannot take them.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('settings')}
+                    className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-[var(--accent-amber,#FFB020)] text-[#0F100E] hover:opacity-90 transition-opacity cursor-pointer"
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleSaveSettings({ backupPromptDismissedAtCount: backupSafety.entriesSinceBackup })
+                    }
+                    className="text-[11px] font-medium px-2 py-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                  >
+                    Later
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Due Recurring Occurrences Section */}
             <HomeDueSection
               dueOccurrences={dueOccurrences}
@@ -1181,6 +1227,7 @@ export default function App() {
               categories={categories}
               limits={limits}
               recurringCount={recurringRules.length}
+              entries={entries}
               sampleCount={sampleCount}
               onLoadSampleData={handleLoadSampleData}
               onClearSampleData={handleClearSampleData}

@@ -94,6 +94,10 @@ export interface UserSettings {
   hasDismissedSamplePrompt?: boolean;
   themeMode?: 'light' | 'dark' | 'system';
   hasSeenWelcome?: boolean;
+  /** When the user last exported a backup */
+  lastBackupAt?: number;
+  /** Unprotected entry count when the backup reminder was last dismissed */
+  backupPromptDismissedAtCount?: number;
 }
 
 export interface BudgetPeriod {
